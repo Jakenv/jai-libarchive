@@ -69,13 +69,28 @@ generate_bindings :: () -> bool {
     generate_printf_wrappers = false;
     strip_flags |= .INLINED_FUNCTIONS; // "inline" functions are not present in the static library.
 
-    visitor   = noop_visitor;
+    visitor   = libarchive_visitor;
   }
 
   return generate_bindings(opts, output_filename);
 }
 
-noop_visitor :: (decl: *Declaration, parent_decl: *Declaration) -> Declaration_Visit_Result {
+libarchive_visitor :: (decl: *Declaration, parent_decl: *Declaration) -> Declaration_Visit_Result {
+
+  // prevent duplicate globals
+  first_seen : *Declaration;
+  for context.compiler.global_scope.members {
+    if it.name == decl.name && !it.parent {
+      if first_seen {
+        if first_seen.location.file != decl.location.file {
+          print("% was already declared, skipping redeclare\n", decl.name);
+          decl.decl_flags |= .OMIT_FROM_OUTPUT;
+        }
+      } else {
+        first_seen = it;
+      }
+    }
+  }
 
   return .RECURSE;
 }
