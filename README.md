@@ -4,6 +4,8 @@ Jai bindings for [libarchive](https://www.libarchive.org/).
 
 ## Build
 
+If on Linux, you will need the `libarchive` system library, for example on Ubuntu the package is called `libarchive13`.
+
 The libarchive source is a git submodule:
 
 ```
