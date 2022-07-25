@@ -1301,4 +1301,4 @@ archive_entry_partial_links :: (res: *archive_entry_linkresolver, links: *u32) -
 
 #scope_file
 
-libarchive :: #foreign_library "lib/libarchive";
+libarchive :: #foreign_system_library "libarchive";

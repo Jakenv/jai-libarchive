@@ -53,7 +53,9 @@ generate_bindings :: () -> bool {
   {
     using opts;
 
-    array_add(*libpaths, "lib");
+    #if OS == .WINDOWS {
+      array_add(*libpaths, "lib");
+    }
     array_add(*libnames, "libarchive");
 
     array_add(*system_include_paths, GENERATOR_DEFAULT_SYSTEM_INCLUDE_PATH);
@@ -75,21 +77,17 @@ generate_bindings :: () -> bool {
   return generate_bindings(opts, output_filename);
 }
 
+
+version_declared : bool = false;
+
 libarchive_visitor :: (decl: *Declaration, parent_decl: *Declaration) -> Declaration_Visit_Result {
 
   // prevent duplicate globals
-  first_seen : *Declaration;
-  for context.compiler.global_scope.members {
-    if it.name == decl.name && !it.parent {
-      if first_seen {
-        if first_seen.location.file != decl.location.file {
-          print("% was already declared, skipping redeclare\n", decl.name);
-          decl.decl_flags |= .OMIT_FROM_OUTPUT;
-        }
-      } else {
-        first_seen = it;
-      }
-    }
+  if decl.name == "ARCHIVE_VERSION_NUMBER" {
+    if version_declared {
+      print("% was already declared, skipping redeclare\n", decl.name);
+      decl.decl_flags |= .OMIT_FROM_OUTPUT;
+    } else  version_declared = true;
   }
 
   return .RECURSE;
