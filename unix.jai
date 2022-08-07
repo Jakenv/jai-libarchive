@@ -8,6 +8,12 @@
 
 ARCHIVE_VERSION_NUMBER :: 3006002;
 
+__LA_INT64_T :: la_int64_t;
+
+__LA_SSIZE_T :: la_ssize_t;
+
+archive_entry_partial_links :: (res: *archive_entry_linkresolver, links: *u32) -> *archive_entry #foreign libarchive;
+
 ARCHIVE_VERSION_ONLY_STRING :: "3.6.2dev";
 
 ARCHIVE_EOF :: 1;
@@ -35,19 +41,42 @@ ARCHIVE_FILTER_GRZIP :: 12;
 ARCHIVE_FILTER_LZ4 :: 13;
 ARCHIVE_FILTER_ZSTD :: 14;
 
+ARCHIVE_COMPRESSION_NONE :: ARCHIVE_FILTER_NONE;
+ARCHIVE_COMPRESSION_GZIP :: ARCHIVE_FILTER_GZIP;
+ARCHIVE_COMPRESSION_BZIP2 :: ARCHIVE_FILTER_BZIP2;
+ARCHIVE_COMPRESSION_COMPRESS :: ARCHIVE_FILTER_COMPRESS;
+ARCHIVE_COMPRESSION_PROGRAM :: ARCHIVE_FILTER_PROGRAM;
+ARCHIVE_COMPRESSION_LZMA :: ARCHIVE_FILTER_LZMA;
+ARCHIVE_COMPRESSION_XZ :: ARCHIVE_FILTER_XZ;
+ARCHIVE_COMPRESSION_UU :: ARCHIVE_FILTER_UU;
+ARCHIVE_COMPRESSION_RPM :: ARCHIVE_FILTER_RPM;
+ARCHIVE_COMPRESSION_LZIP :: ARCHIVE_FILTER_LZIP;
+ARCHIVE_COMPRESSION_LRZIP :: ARCHIVE_FILTER_LRZIP;
+
 ARCHIVE_FORMAT_BASE_MASK :: 0xff0000;
 ARCHIVE_FORMAT_CPIO :: 0x10000;
-
+ARCHIVE_FORMAT_CPIO_POSIX :: ARCHIVE_FORMAT_CPIO | 1;
+ARCHIVE_FORMAT_CPIO_BIN_LE :: ARCHIVE_FORMAT_CPIO | 2;
+ARCHIVE_FORMAT_CPIO_BIN_BE :: ARCHIVE_FORMAT_CPIO | 3;
+ARCHIVE_FORMAT_CPIO_SVR4_NOCRC :: ARCHIVE_FORMAT_CPIO | 4;
+ARCHIVE_FORMAT_CPIO_SVR4_CRC :: ARCHIVE_FORMAT_CPIO | 5;
+ARCHIVE_FORMAT_CPIO_AFIO_LARGE :: ARCHIVE_FORMAT_CPIO | 6;
+ARCHIVE_FORMAT_CPIO_PWB :: ARCHIVE_FORMAT_CPIO | 7;
 ARCHIVE_FORMAT_SHAR :: 0x20000;
-
+ARCHIVE_FORMAT_SHAR_BASE :: ARCHIVE_FORMAT_SHAR | 1;
+ARCHIVE_FORMAT_SHAR_DUMP :: ARCHIVE_FORMAT_SHAR | 2;
 ARCHIVE_FORMAT_TAR :: 0x30000;
-
+ARCHIVE_FORMAT_TAR_USTAR :: ARCHIVE_FORMAT_TAR | 1;
+ARCHIVE_FORMAT_TAR_PAX_INTERCHANGE :: ARCHIVE_FORMAT_TAR | 2;
+ARCHIVE_FORMAT_TAR_PAX_RESTRICTED :: ARCHIVE_FORMAT_TAR | 3;
+ARCHIVE_FORMAT_TAR_GNUTAR :: ARCHIVE_FORMAT_TAR | 4;
 ARCHIVE_FORMAT_ISO9660 :: 0x40000;
-
+ARCHIVE_FORMAT_ISO9660_ROCKRIDGE :: ARCHIVE_FORMAT_ISO9660 | 1;
 ARCHIVE_FORMAT_ZIP :: 0x50000;
 ARCHIVE_FORMAT_EMPTY :: 0x60000;
 ARCHIVE_FORMAT_AR :: 0x70000;
-
+ARCHIVE_FORMAT_AR_GNU :: ARCHIVE_FORMAT_AR | 1;
+ARCHIVE_FORMAT_AR_BSD :: ARCHIVE_FORMAT_AR | 2;
 ARCHIVE_FORMAT_MTREE :: 0x80000;
 ARCHIVE_FORMAT_RAW :: 0x90000;
 ARCHIVE_FORMAT_XAR :: 0xA0000;
@@ -129,6 +158,95 @@ ARCHIVE_MATCH_OLDER :: 0x0002;
 
 ARCHIVE_MATCH_EQUAL :: 0x0010;
 
+archive_entry_linkify :: (unk0: *archive_entry_linkresolver, unk1: **archive_entry, unk2: **archive_entry) -> void #foreign libarchive;
+
+archive_entry_linkresolver_free :: (unk0: *archive_entry_linkresolver) -> void #foreign libarchive;
+
+archive_entry_linkresolver_set_strategy :: (unk0: *archive_entry_linkresolver, unk1: s32) -> void #foreign libarchive;
+
+/*
+* There are three different strategies for marking hardlinks.
+* The descriptions below name them after the best-known
+* formats that rely on each strategy:
+*
+* "Old cpio" is the simplest, it always returns any entry unmodified.
+*    As far as I know, only cpio formats use this.  Old cpio archives
+*    store every link with the full body; the onus is on the dearchiver
+*    to detect and properly link the files as they are restored.
+* "tar" is also pretty simple; it caches a copy the first time it sees
+*    any link.  Subsequent appearances are modified to be hardlink
+*    references to the first one without any body.  Used by all tar
+*    formats, although the newest tar formats permit the "old cpio" strategy
+*    as well.  This strategy is very simple for the dearchiver,
+*    and reasonably straightforward for the archiver.
+* "new cpio" is trickier.  It stores the body only with the last
+*    occurrence.  The complication is that we might not
+*    see every link to a particular file in a single session, so
+*    there's no easy way to know when we've seen the last occurrence.
+*    The solution here is to queue one link until we see the next.
+*    At the end of the session, you can enumerate any remaining
+*    entries by calling archive_entry_linkify(NULL) and store those
+*    bodies.  If you have a file with three links l1, l2, and l3,
+*    you'll get the following behavior if you see all three links:
+*           linkify(l1) => NULL   (the resolver stores l1 internally)
+*           linkify(l2) => l1     (resolver stores l2, you write l1)
+*           linkify(l3) => l2, l3 (all links seen, you can write both).
+*    If you only see l1 and l2, you'll get this behavior:
+*           linkify(l1) => NULL
+*           linkify(l2) => l1
+*           linkify(NULL) => l2   (at end, you retrieve remaining links)
+*    As the name suggests, this strategy is used by newer cpio variants.
+*    It's noticeably more complex for the archiver, slightly more complex
+*    for the dearchiver than the tar strategy, but makes it straightforward
+*    to restore a file using any link by simply continuing to scan until
+*    you see a link that is stored with a body.  In contrast, the tar
+*    strategy requires you to rescan the archive from the beginning to
+*    correctly extract an arbitrary link.
+*/
+archive_entry_linkresolver_new :: () -> *archive_entry_linkresolver #foreign libarchive;
+
+/*
+* Utility to match up hardlinks.
+*
+* The 'struct archive_entry_linkresolver' is a cache of archive entries
+* for files with multiple links.  Here's how to use it:
+*   1. Create a lookup object with archive_entry_linkresolver_new()
+*   2. Tell it the archive format you're using.
+*   3. Hand each archive_entry to archive_entry_linkify().
+*      That function will return 0, 1, or 2 entries that should
+*      be written.
+*   4. Call archive_entry_linkify(resolver, NULL) until
+*      no more entries are returned.
+*   5. Call archive_entry_linkresolver_free(resolver) to free resources.
+*
+* The entries returned have their hardlink and size fields updated
+* appropriately.  If an entry is passed in that does not refer to
+* a file with multiple links, it is returned unchanged.  The intention
+* is that you should be able to simply filter all entries through
+* this machine.
+*
+* To make things more efficient, be sure that each entry has a valid
+* nlinks value.  The hardlink cache uses this to track when all links
+* have been found.  If the nlinks value is zero, it will keep every
+* name in the cache indefinitely, which can use a lot of memory.
+*
+* Note that archive_entry_size() is reset to zero if the file
+* body should not be written to the archive.  Pay attention!
+*/
+archive_entry_linkresolver :: struct {}
+
+archive_entry_sparse_next :: (unk0: *archive_entry, unk1: *la_int64_t, unk2: *la_int64_t) -> s32 #foreign libarchive;
+
+archive_entry_sparse_reset :: (unk0: *archive_entry) -> s32 #foreign libarchive;
+
+/*
+* To retrieve the xattr list, first "reset", then repeatedly ask for the
+* "next" entry.
+*/
+archive_entry_sparse_count :: (unk0: *archive_entry) -> s32 #foreign libarchive;
+
+archive_entry_sparse_add_entry :: (unk0: *archive_entry, unk1: la_int64_t, unk2: la_int64_t) -> void #foreign libarchive;
+
 AE_SYMLINK_TYPE_UNDEFINED :: 0;
 AE_SYMLINK_TYPE_FILE :: 1;
 AE_SYMLINK_TYPE_DIRECTORY :: 2;
@@ -160,6 +278,10 @@ ARCHIVE_ENTRY_ACL_WRITE_ACL :: 0x00002000;
 ARCHIVE_ENTRY_ACL_WRITE_OWNER :: 0x00004000;
 ARCHIVE_ENTRY_ACL_SYNCHRONIZE :: 0x00008000;
 
+ARCHIVE_ENTRY_ACL_PERMS_POSIX1E :: ARCHIVE_ENTRY_ACL_EXECUTE | ARCHIVE_ENTRY_ACL_WRITE | ARCHIVE_ENTRY_ACL_READ;
+
+ARCHIVE_ENTRY_ACL_PERMS_NFS4 :: ARCHIVE_ENTRY_ACL_EXECUTE | ARCHIVE_ENTRY_ACL_READ_DATA | ARCHIVE_ENTRY_ACL_LIST_DIRECTORY | ARCHIVE_ENTRY_ACL_WRITE_DATA | ARCHIVE_ENTRY_ACL_ADD_FILE | ARCHIVE_ENTRY_ACL_APPEND_DATA | ARCHIVE_ENTRY_ACL_ADD_SUBDIRECTORY | ARCHIVE_ENTRY_ACL_READ_NAMED_ATTRS | ARCHIVE_ENTRY_ACL_WRITE_NAMED_ATTRS | ARCHIVE_ENTRY_ACL_DELETE_CHILD | ARCHIVE_ENTRY_ACL_READ_ATTRIBUTES | ARCHIVE_ENTRY_ACL_WRITE_ATTRIBUTES | ARCHIVE_ENTRY_ACL_DELETE | ARCHIVE_ENTRY_ACL_READ_ACL | ARCHIVE_ENTRY_ACL_WRITE_ACL | ARCHIVE_ENTRY_ACL_WRITE_OWNER | ARCHIVE_ENTRY_ACL_SYNCHRONIZE;
+
 ARCHIVE_ENTRY_ACL_ENTRY_INHERITED :: 0x01000000;
 ARCHIVE_ENTRY_ACL_ENTRY_FILE_INHERIT :: 0x02000000;
 ARCHIVE_ENTRY_ACL_ENTRY_DIRECTORY_INHERIT :: 0x04000000;
@@ -168,12 +290,17 @@ ARCHIVE_ENTRY_ACL_ENTRY_INHERIT_ONLY :: 0x10000000;
 ARCHIVE_ENTRY_ACL_ENTRY_SUCCESSFUL_ACCESS :: 0x20000000;
 ARCHIVE_ENTRY_ACL_ENTRY_FAILED_ACCESS :: 0x40000000;
 
+ARCHIVE_ENTRY_ACL_INHERITANCE_NFS4 :: ARCHIVE_ENTRY_ACL_ENTRY_FILE_INHERIT | ARCHIVE_ENTRY_ACL_ENTRY_DIRECTORY_INHERIT | ARCHIVE_ENTRY_ACL_ENTRY_NO_PROPAGATE_INHERIT | ARCHIVE_ENTRY_ACL_ENTRY_INHERIT_ONLY | ARCHIVE_ENTRY_ACL_ENTRY_SUCCESSFUL_ACCESS | ARCHIVE_ENTRY_ACL_ENTRY_FAILED_ACCESS | ARCHIVE_ENTRY_ACL_ENTRY_INHERITED;
+
 ARCHIVE_ENTRY_ACL_TYPE_ACCESS :: 0x00000100;
 ARCHIVE_ENTRY_ACL_TYPE_DEFAULT :: 0x00000200;
 ARCHIVE_ENTRY_ACL_TYPE_ALLOW :: 0x00000400;
 ARCHIVE_ENTRY_ACL_TYPE_DENY :: 0x00000800;
 ARCHIVE_ENTRY_ACL_TYPE_AUDIT :: 0x00001000;
 ARCHIVE_ENTRY_ACL_TYPE_ALARM :: 0x00002000;
+ARCHIVE_ENTRY_ACL_TYPE_POSIX1E :: ARCHIVE_ENTRY_ACL_TYPE_ACCESS | ARCHIVE_ENTRY_ACL_TYPE_DEFAULT;
+
+ARCHIVE_ENTRY_ACL_TYPE_NFS4 :: ARCHIVE_ENTRY_ACL_TYPE_ALLOW | ARCHIVE_ENTRY_ACL_TYPE_DENY | ARCHIVE_ENTRY_ACL_TYPE_AUDIT | ARCHIVE_ENTRY_ACL_TYPE_ALARM;
 
 ARCHIVE_ENTRY_ACL_USER :: 10001;
 ARCHIVE_ENTRY_ACL_USER_OBJ :: 10002;
@@ -308,7 +435,7 @@ archive_read_support_compression_uu :: (unk0: *archive) -> s32 #foreign libarchi
 archive_read_support_compression_xz :: (unk0: *archive) -> s32 #foreign libarchive;
 
 archive_read_support_filter_all :: (unk0: *archive) -> s32 #foreign libarchive;
-
+archive_read_support_filter_by_code :: (unk0: *archive, unk1: s32) -> s32 #foreign libarchive;
 archive_read_support_filter_bzip2 :: (unk0: *archive) -> s32 #foreign libarchive;
 archive_read_support_filter_compress :: (unk0: *archive) -> s32 #foreign libarchive;
 archive_read_support_filter_gzip :: (unk0: *archive) -> s32 #foreign libarchive;
@@ -612,9 +739,10 @@ archive_write_set_format_7zip :: (unk0: *archive) -> s32 #foreign libarchive;
 archive_write_set_format_ar_bsd :: (unk0: *archive) -> s32 #foreign libarchive;
 archive_write_set_format_ar_svr4 :: (unk0: *archive) -> s32 #foreign libarchive;
 archive_write_set_format_cpio :: (unk0: *archive) -> s32 #foreign libarchive;
-
+archive_write_set_format_cpio_bin :: (unk0: *archive) -> s32 #foreign libarchive;
 archive_write_set_format_cpio_newc :: (unk0: *archive) -> s32 #foreign libarchive;
-
+archive_write_set_format_cpio_odc :: (unk0: *archive) -> s32 #foreign libarchive;
+archive_write_set_format_cpio_pwb :: (unk0: *archive) -> s32 #foreign libarchive;
 archive_write_set_format_gnutar :: (unk0: *archive) -> s32 #foreign libarchive;
 archive_write_set_format_iso9660 :: (unk0: *archive) -> s32 #foreign libarchive;
 archive_write_set_format_mtree :: (unk0: *archive) -> s32 #foreign libarchive;
@@ -638,6 +766,8 @@ archive_write_zip_set_compression_store :: (unk0: *archive) -> s32 #foreign liba
 
 /* Deprecated; use archive_write_open2 instead */
 archive_write_open :: (unk0: *archive, unk1: *void, unk2: archive_open_callback, unk3: archive_write_callback, unk4: archive_close_callback) -> s32 #foreign libarchive;
+
+archive_write_open2 :: (unk0: *archive, unk1: *void, unk2: archive_open_callback, unk3: archive_write_callback, unk4: archive_close_callback, unk5: archive_free_callback) -> s32 #foreign libarchive;
 
 archive_write_open_fd :: (unk0: *archive, _fd: s32) -> s32 #foreign libarchive;
 archive_write_open_filename :: (unk0: *archive, _file: *u8) -> s32 #foreign libarchive;
@@ -1148,6 +1278,8 @@ archive_entry_copy_stat :: (unk0: *archive_entry, unk1: *stat) -> void #foreign 
 archive_entry_mac_metadata :: (unk0: *archive_entry, unk1: *size_t) -> *void #foreign libarchive;
 archive_entry_copy_mac_metadata :: (unk0: *archive_entry, unk1: *void, unk2: size_t) -> void #foreign libarchive;
 
+archive_entry_digest :: (unk0: *archive_entry, unk1: s32) -> *u8 #foreign libarchive;
+
 /*
 * Set the ACL by clearing it and adding entries one at a time.
 * Unlike the POSIX.1e ACL routines, you must specify the type
@@ -1212,92 +1344,6 @@ archive_entry_xattr_next :: (unk0: *archive_entry, unk1: **u8, unk2: **void, unk
 * sparse
 */
 archive_entry_sparse_clear :: (unk0: *archive_entry) -> void #foreign libarchive;
-archive_entry_sparse_add_entry :: (unk0: *archive_entry, unk1: la_int64_t, unk2: la_int64_t) -> void #foreign libarchive;
-
-/*
-* To retrieve the xattr list, first "reset", then repeatedly ask for the
-* "next" entry.
-*/
-archive_entry_sparse_count :: (unk0: *archive_entry) -> s32 #foreign libarchive;
-archive_entry_sparse_reset :: (unk0: *archive_entry) -> s32 #foreign libarchive;
-archive_entry_sparse_next :: (unk0: *archive_entry, unk1: *la_int64_t, unk2: *la_int64_t) -> s32 #foreign libarchive;
-
-/*
-* Utility to match up hardlinks.
-*
-* The 'struct archive_entry_linkresolver' is a cache of archive entries
-* for files with multiple links.  Here's how to use it:
-*   1. Create a lookup object with archive_entry_linkresolver_new()
-*   2. Tell it the archive format you're using.
-*   3. Hand each archive_entry to archive_entry_linkify().
-*      That function will return 0, 1, or 2 entries that should
-*      be written.
-*   4. Call archive_entry_linkify(resolver, NULL) until
-*      no more entries are returned.
-*   5. Call archive_entry_linkresolver_free(resolver) to free resources.
-*
-* The entries returned have their hardlink and size fields updated
-* appropriately.  If an entry is passed in that does not refer to
-* a file with multiple links, it is returned unchanged.  The intention
-* is that you should be able to simply filter all entries through
-* this machine.
-*
-* To make things more efficient, be sure that each entry has a valid
-* nlinks value.  The hardlink cache uses this to track when all links
-* have been found.  If the nlinks value is zero, it will keep every
-* name in the cache indefinitely, which can use a lot of memory.
-*
-* Note that archive_entry_size() is reset to zero if the file
-* body should not be written to the archive.  Pay attention!
-*/
-archive_entry_linkresolver :: struct {}
-
-/*
-* There are three different strategies for marking hardlinks.
-* The descriptions below name them after the best-known
-* formats that rely on each strategy:
-*
-* "Old cpio" is the simplest, it always returns any entry unmodified.
-*    As far as I know, only cpio formats use this.  Old cpio archives
-*    store every link with the full body; the onus is on the dearchiver
-*    to detect and properly link the files as they are restored.
-* "tar" is also pretty simple; it caches a copy the first time it sees
-*    any link.  Subsequent appearances are modified to be hardlink
-*    references to the first one without any body.  Used by all tar
-*    formats, although the newest tar formats permit the "old cpio" strategy
-*    as well.  This strategy is very simple for the dearchiver,
-*    and reasonably straightforward for the archiver.
-* "new cpio" is trickier.  It stores the body only with the last
-*    occurrence.  The complication is that we might not
-*    see every link to a particular file in a single session, so
-*    there's no easy way to know when we've seen the last occurrence.
-*    The solution here is to queue one link until we see the next.
-*    At the end of the session, you can enumerate any remaining
-*    entries by calling archive_entry_linkify(NULL) and store those
-*    bodies.  If you have a file with three links l1, l2, and l3,
-*    you'll get the following behavior if you see all three links:
-*           linkify(l1) => NULL   (the resolver stores l1 internally)
-*           linkify(l2) => l1     (resolver stores l2, you write l1)
-*           linkify(l3) => l2, l3 (all links seen, you can write both).
-*    If you only see l1 and l2, you'll get this behavior:
-*           linkify(l1) => NULL
-*           linkify(l2) => l1
-*           linkify(NULL) => l2   (at end, you retrieve remaining links)
-*    As the name suggests, this strategy is used by newer cpio variants.
-*    It's noticeably more complex for the archiver, slightly more complex
-*    for the dearchiver than the tar strategy, but makes it straightforward
-*    to restore a file using any link by simply continuing to scan until
-*    you see a link that is stored with a body.  In contrast, the tar
-*    strategy requires you to rescan the archive from the beginning to
-*    correctly extract an arbitrary link.
-*/
-archive_entry_linkresolver_new :: () -> *archive_entry_linkresolver #foreign libarchive;
-archive_entry_linkresolver_set_strategy :: (unk0: *archive_entry_linkresolver, unk1: s32) -> void #foreign libarchive;
-
-archive_entry_linkresolver_free :: (unk0: *archive_entry_linkresolver) -> void #foreign libarchive;
-archive_entry_linkify :: (unk0: *archive_entry_linkresolver, unk1: **archive_entry, unk2: **archive_entry) -> void #foreign libarchive;
-
-archive_entry_partial_links :: (res: *archive_entry_linkresolver, links: *u32) -> *archive_entry #foreign libarchive;
 
 #scope_file
 

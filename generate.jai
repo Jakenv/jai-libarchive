@@ -90,6 +90,10 @@ libarchive_visitor :: (decl: *Declaration, parent_decl: *Declaration) -> Declara
     } else  version_declared = true;
   }
 
+  if decl.name == "ARCHIVE_VERSION_STRING" {
+    decl.decl_flags |= .OMIT_FROM_OUTPUT;
+  }
+
   return .RECURSE;
 }
 
