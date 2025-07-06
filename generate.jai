@@ -58,7 +58,7 @@ generate_bindings :: () -> bool {
     }
     array_add(*libnames, "libarchive");
 
-    array_add(*system_include_paths, GENERATOR_DEFAULT_SYSTEM_INCLUDE_PATH);
+    array_add(*system_include_paths, ..get_default_system_include_paths());
 
     array_add(*include_paths, SRC_PATH);
 
