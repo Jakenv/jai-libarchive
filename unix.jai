@@ -12,7 +12,7 @@ __LA_INT64_T :: la_int64_t;
 
 __LA_SSIZE_T :: la_ssize_t;
 
-ARCHIVE_VERSION_ONLY_STRING :: "3.9.0";
+ARCHIVE_VERSION_ONLY_STRING :: "3.9.0dev";
 
 ARCHIVE_EOF :: 1;
 ARCHIVE_OK :: 0;
@@ -276,7 +276,9 @@ archive_openssl_version :: () -> *u8 #foreign libarchive;
 archive_libmd_version :: () -> *u8 #foreign libarchive;
 archive_commoncrypto_version :: () -> *u8 #foreign libarchive;
 archive_cng_version :: () -> *u8 #foreign libarchive;
+
 archive_wincrypt_version :: () -> *u8 #foreign libarchive;
+
 archive_librichacl_version :: () -> *u8 #foreign libarchive;
 archive_libacl_version :: () -> *u8 #foreign libarchive;
 archive_libattr_version :: () -> *u8 #foreign libarchive;

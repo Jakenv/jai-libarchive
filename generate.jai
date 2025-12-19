@@ -56,7 +56,7 @@ generate_bindings :: () -> bool {
     #if OS == .WINDOWS {
       array_add(*libpaths, "lib");
     }
-    array_add(*libnames, "libarchive");
+    array_add(*libraries, .{filename="libarchive"});
 
     array_add(*system_include_paths, ..get_default_system_include_paths());
 
