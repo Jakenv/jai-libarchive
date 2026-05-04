@@ -14,9 +14,12 @@ wchar_t :: u64;
 
   #import "Windows";
   #load "windows.jai";
-} else {
+} else #if OS == .LINUX {
   #import "POSIX";
-  #load "unix.jai";
+  #load "linux.jai";
+} else #if OS == .MACOS {
+  #import "POSIX";
+  #load "macos.jai";
 }
 
 stat :: stat_t;
